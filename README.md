@@ -18,6 +18,7 @@ Traccia is a lightweight, high-performance Python SDK for observability and trac
 - **🛡️ Production-Ready**: Rate limiting, error handling, config validation, robust 
 flushing
 - **🛡️ Guardrail Detection**: Passive, zero-overhead detection of guardrails in traces — explicit, provider-native, and heuristic
+- **⚖️ Governance**: Art. 50 transparency evidence, EU risk-tier on spans, integrity hashes, and PII redaction before export
 - **📝 Type-Safe**: Full Pydantic validation for configuration
 - **🚀 High Performance**: Efficient batching, async support, minimal overhead
 - **🔐 Secure**: No secrets in logs, configurable data truncation
@@ -1150,6 +1151,54 @@ pytest traccia/tests/ --cov=traccia --cov-report=html
 - **Documentation**: Tutorials, guides, video walkthroughs
 - **Performance**: Optimize hot paths, reduce overhead
 - **Testing**: Improve test coverage, add integration tests
+
+---
+
+## Governance
+
+Traccia adds **GovernanceEvent** attributes on spans automatically (event type, integrity hash, timestamp source). No EU-specific setup is required for default tracing. **Human review** (approve/reject, audit trail) is done in the **Governance Hub** on the platform — not in the SDK.
+
+### Human review (platform only)
+
+Queue and decide reviews in **Governance Hub → Reviews** using a **trace ID**. The SDK does not create review queue rows. Use the dashboard when a person must sign off before you rely on an automated output.
+
+### Art. 50 transparency — `disclosure()`
+
+When your product **shows** the user they are interacting with AI (banner, label, chat notice) or synthetic content, call `disclosure()` on the active span so exported traces carry audit evidence (`governance.transparency.disclosed`, `governance.event_type=transparency`). It does **not** render UI.
+
+```python
+from traccia.governance import disclosure
+
+disclosure(channel="ui", disclosed_to_user=True)  # after user saw your AI notice
+```
+
+### EU risk tier on spans
+
+`init(compliance={"frameworks": ["eu_ai_act"], "risk_tier": "high"})` stamps `eu_ai_act.risk_tier` on every span from that process. Static SDK config — not read from the dashboard registry. Link registry + agent in the UI for exports; set `risk_tier` in `init()` if you need it on every span.
+
+### PII redaction
+
+Pattern-based masking (email, US phone, SSN-like) — not ML PII detection.
+
+```python
+from opentelemetry import trace
+from traccia import init, observe
+from traccia.processors.redaction_processor import redact_string, apply_redaction_to_span
+
+# Automatic: redact sensitive attribute keys on every span before export
+init(redact_pii=True)  # or TRACCIA_REDACT_PII=1
+
+@observe()
+def agent_step(user_message: str) -> str:
+    span = trace.get_current_span()
+    span.set_attribute("gen_ai.prompt", redact_string(user_message))  # manual
+    out = run_llm(user_message)
+    apply_redaction_to_span(span)  # or rely on init(redact_pii=True)
+    return out
+```
+
+- **Platform**: [Governance Hub](https://traccia.ai/docs/platform/governance) — registry, reviews, incidents, evidence exports.
+- **EU AI Act guide**: [docs/compliance/eu-ai-act](https://traccia.ai/docs/compliance/eu-ai-act) (opt-in module; decision support only).
 
 ---
 

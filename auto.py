@@ -346,6 +346,8 @@ def start_tracing(
     metrics_endpoint: Optional[str] = None,  # Metrics endpoint
     metrics_sample_rate: float = 1.0,  # Metrics sampling rate
     service_role: Optional[str] = None,  # Optional logical role (e.g. orchestrator)
+    compliance: Optional[dict] = None,  # e.g. {"frameworks": ["eu_ai_act"], "risk_tier": "high"}
+    redact_pii: Optional[bool] = None,  # Mask email/phone/SSN on sensitive span attrs before export
 ) -> TracerProvider:
     """
     Initialize global tracing:
@@ -573,6 +575,45 @@ def start_tracing(
             "Could not register GuardrailDetectorProcessor: %s",
             _gr_exc,
         )
+
+    # Governance enrichment: default GovernanceEvent attrs on all spans
+    _compliance = compliance
+    if _compliance is None:
+        _comp_env = sdk_config.get_env_value("compliance_frameworks")
+        if _comp_env:
+            _compliance = {"frameworks": [f.strip() for f in str(_comp_env).split(",") if f.strip()]}
+    _eu_tier = None
+    if isinstance(_compliance, dict) and "eu_ai_act" in (_compliance.get("frameworks") or []):
+        _eu_tier = _compliance.get("risk_tier")
+    try:
+        from traccia.processors.governance_enrichment import GovernanceEnrichmentProcessor
+
+        provider.add_span_processor(GovernanceEnrichmentProcessor(eu_risk_tier=_eu_tier))
+    except Exception as _gov_exc:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Could not register GovernanceEnrichmentProcessor: %s",
+            _gov_exc,
+        )
+
+    _redact_pii = redact_pii
+    if _redact_pii is None:
+        _redact_env = sdk_config.get_env_value("redact_pii") or sdk_config.get_env_value("TRACCIA_REDACT_PII")
+        if _redact_env is not None:
+            _redact_pii = str(_redact_env).strip().lower() in ("1", "true", "yes", "on")
+    if _redact_pii:
+        try:
+            from traccia.processors.redaction_processor import RedactionSpanProcessor
+
+            provider.add_span_processor(RedactionSpanProcessor())
+        except Exception as _red_exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Could not register RedactionSpanProcessor: %s",
+                _red_exc,
+            )
 
     # For OTLP exporter, use OTel's BatchSpanProcessor directly
     # For non-OTLP exporters (console/file), use our custom BatchSpanProcessor
